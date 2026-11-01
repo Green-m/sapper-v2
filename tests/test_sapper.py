@@ -2,6 +2,7 @@ import contextlib
 import io
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 import sapper  # noqa: E402
 
 SETTINGS_PATH = ROOT / "lib" / "_settings_patch.py"
+HOOK_PATH = ROOT / "lib" / "sapper-hook.py"
 _spec = importlib.util.spec_from_file_location("settings_patch_for_tests", SETTINGS_PATH)
 settings_patch = importlib.util.module_from_spec(_spec)
 assert _spec and _spec.loader
@@ -256,6 +258,74 @@ class SettingsPatchTests(unittest.TestCase):
             path.write_text(json.dumps({"hooks": {"SessionStart": {}}}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "hooks.SessionStart"):
                 settings_patch.validate(path)
+
+
+class HookBridgeTests(unittest.TestCase):
+    """The hook bridge is registered into every opted-in project's
+    .claude/settings.json, but Claude Code swallows hook failures, so a broken
+    import here fails silently forever. Pin the contract: the module loads and
+    both events emit Claude Code's JSON payload."""
+
+    def test_hook_loads_the_cli_module(self):
+        hook = _load_hook()
+        self.assertEqual(hook.DEFAULT_STORE, sapper.DEFAULT_STORE)
+
+    def test_frontier_block_renders_an_existing_graph(self):
+        hook = _load_hook()
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp) / ".sapper"
+            store = sapper.Store(store_dir)
+            store.init("test", "ship it")
+            store.add_fact("port 80 open on target", "test")
+            text = hook._frontier_block(store_dir)
+            self.assertIn("port 80 open on target", text)
+            self.assertIn("ship it", text)
+
+    def test_sessionstart_emits_context_for_a_project_with_a_graph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sapper.Store(Path(tmp) / ".sapper").init("test", "ship it")
+            proc = _run_hook(tmp, "sessionstart")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["hookSpecificOutput"]["hookEventName"], "SessionStart")
+            self.assertIn(".sapper", payload["hookSpecificOutput"]["additionalContext"])
+
+    def test_userpromptsubmit_emits_the_graph_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sapper.Store(Path(tmp) / ".sapper").init("test", "ship it")
+            proc = _run_hook(tmp, "userpromptsubmit", stdin=json.dumps({"cwd": tmp}))
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
+            self.assertIn("ship it", payload["hookSpecificOutput"]["contextForClaude"])
+
+    def test_hooks_are_silent_without_a_graph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = _run_hook(tmp, "sessionstart")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), "")
+
+
+def _load_hook():
+    """Load lib/sapper-hook.py by path: the file name has a hyphen, so it is
+    not importable as a normal module."""
+    spec = importlib.util.spec_from_file_location("sapper_hook_for_tests", HOOK_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_hook(cwd, event, stdin=""):
+    """Invoke the hook the way Claude Code does: a subprocess, one event name."""
+    return subprocess.run(
+        [sys.executable, str(HOOK_PATH), event],
+        cwd=cwd,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
 
 class PeerConfigTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-fg-hook — Claude Code hook bridge for the fact-graph.
+sapper-hook — Claude Code hook bridge for the fact-graph.
 
 Strictly opt-in: the fact-graph is activated ONLY when the user runs
 `sapper init` in a project. Until then the hooks are completely silent — no
@@ -9,10 +9,10 @@ deserves a graph; the hook just keeps an existing one in front of the model.
 
 Two hook entry points (selected by argv[1]):
 
-  fg-hook sessionstart   -> if a .sapper/ exists, remind the model to read/maintain
-                            it this session. Otherwise: silent.
+  sapper-hook sessionstart   -> if a .sapper/ exists, remind the model to read/maintain
+                                it this session. Otherwise: silent.
 
-  fg-hook userpromptsubmit <json-on-stdin>
+  sapper-hook userpromptsubmit <json-on-stdin>
                           -> if a .sapper/ exists, inject the current frontier +
                             goal as contextForClaude before every turn.
                             Otherwise: silent (never suggests init).
@@ -36,9 +36,9 @@ from pathlib import Path
 # import the CLI as a module so we share renderers
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import fg  # noqa: E402
+import sapper  # noqa: E402
 
-DEFAULT_STORE = fg.DEFAULT_STORE
+DEFAULT_STORE = sapper.DEFAULT_STORE
 
 
 def _date_context() -> str:
@@ -92,10 +92,10 @@ def _find_store_upward(start: Path) -> Path | None:
 
 
 def _frontier_block(store_path: Path) -> str:
-    store = fg.Store(store_path)
+    store = sapper.Store(store_path)
     try:
-        parts: list[str] = [fg.render_status(store)]
-        history = fg.render_history_block(store)
+        parts: list[str] = [sapper.render_status(store)]
+        history = sapper.render_history_block(store)
         if history:
             parts.append("")  # blank line
             parts.append(history)
@@ -193,14 +193,14 @@ def _emit_context(text: str) -> None:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        sys.stderr.write("fg-hook: need an event name (sessionstart|userpromptsubmit)\n")
+        sys.stderr.write("sapper-hook: need an event name (sessionstart|userpromptsubmit)\n")
         return 2
     event = argv[0]
     if event in ("sessionstart", "SessionStart"):
         return sessionstart()
     if event in ("userpromptsubmit", "UserPromptSubmit"):
         return userpromptsubmit()
-    sys.stderr.write(f"fg-hook: unknown event {event!r}\n")
+    sys.stderr.write(f"sapper-hook: unknown event {event!r}\n")
     return 2
 
 
